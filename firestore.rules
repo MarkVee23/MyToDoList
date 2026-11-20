@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 檢查使用者是否已登入
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // 檢查使用者是否為清單擁有人或協作成員
+    function isListMember(listData) {
+      return isAuthenticated() && (
+        listData.ownerId == request.auth.uid || 
+        listData.ownerEmail == request.auth.token.email ||
+        request.auth.token.email in listData.members ||
+        request.auth.uid in listData.members
+      );
+    }
+
+    // 清單集合規則
+    match /lists/{listId} {
+      // 讀取：任何人只要是成員或是公開清單即可讀取
+      allow read: if isAuthenticated() && (
+        resource == null || 
+        resource.data.isPublic == true || 
+        isListMember(resource.data)
+      );
+      
+      // 建立：登入使用者皆可建立清單
+      allow create: if isAuthenticated() && 
+        request.resource.data.ownerId == request.auth.uid;
+      
+      // 更新：清單擁有人或成員，或者正透過邀請碼加入清單的使用者
+      allow update: if isAuthenticated() && (
+        isListMember(resource.data) ||
+        // 允許加入成員名單
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberDetails', 'updatedAt'])
+      );
+      
+      // 刪除：只有清單擁有人可刪除
+      allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+
+      // 清單內的任務子集合
+      match /tasks/{taskId} {
+        // 讀取/寫入：母清單成員皆可存取
+        allow read, write: if isAuthenticated() && (
+          get(/databases/$(database)/documents/lists/$(listId)).data.isPublic == true ||
+          isListMember(get(/databases/$(database)/documents/lists/$(listId)).data)
+        );
+      }
+    }
+  }
+}
